@@ -1,12 +1,14 @@
 import argparse
 import os
-
 import torch
 import yaml
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
+import json
+import random
+import numpy as np
 
 from utils.model import get_model, get_vocoder, get_param_num
 from utils.tools import to_device, log, synth_one_sample
@@ -17,24 +19,46 @@ from evaluate import evaluate
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+def set_random_seed(seed):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    
 
-def main(args, configs):
-    print("Prepare training ...")
+def main(args, configs, seed, seed_data_dict):
+    print(f"Prepare training for Seed {seed} ...")
 
     preprocess_config, model_config, train_config = configs
 
     # Get dataset
-    dataset = Dataset(
-        "train.txt", preprocess_config, train_config, sort=True, drop_last=True
-    )
+    seed_data = seed_data_dict[f'seed_{seed}']
+    train_data_file = seed_data['Train_Set']
+    val_data_file = seed_data['Validation_Set']
+
+    # Train and Validation Datasets
+    train_dataset = Dataset(train_data_file, preprocess_config, train_config, sort=True, drop_last=True)
+    val_dataset = Dataset(val_data_file, preprocess_config, train_config, sort=False, drop_last=False)
+        
     batch_size = train_config["optimizer"]["batch_size"]
     group_size = 4  # Set this larger than 1 to enable sorting in Dataset
-    assert batch_size * group_size < len(dataset)
-    loader = DataLoader(
-        dataset,
+    
+    # DataLoader for train and validation sets
+    train_loader = DataLoader(
+        train_dataset,
         batch_size=batch_size * group_size,
         shuffle=True,
-        collate_fn=dataset.collate_fn,
+        collate_fn=train_dataset.collate_fn,
+    )
+
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        collate_fn=val_dataset.collate_fn,
     )
 
     # Prepare model
@@ -50,8 +74,9 @@ def main(args, configs):
     # Init logger
     for p in train_config["path"].values():
         os.makedirs(p, exist_ok=True)
-    train_log_path = os.path.join(train_config["path"]["log_path"], "train")
-    val_log_path = os.path.join(train_config["path"]["log_path"], "val")
+        
+    train_log_path = os.path.join(train_config["path"]["log_path"], f"train_seed_{seed}")
+    val_log_path = os.path.join(train_config["path"]["log_path"], f"val_seed_{seed}")
     os.makedirs(train_log_path, exist_ok=True)
     os.makedirs(val_log_path, exist_ok=True)
     train_logger = SummaryWriter(train_log_path)
@@ -68,13 +93,13 @@ def main(args, configs):
     synth_step = train_config["step"]["synth_step"]
     val_step = train_config["step"]["val_step"]
 
-    outer_bar = tqdm(total=total_step, desc="Training", position=0)
+    outer_bar = tqdm(total=total_step, desc=f"Training for Seed {seed}", position=0)
     outer_bar.n = args.restore_step
     outer_bar.update()
 
     while True:
-        inner_bar = tqdm(total=len(loader), desc="Epoch {}".format(epoch), position=1)
-        for batchs in loader:
+        inner_bar = tqdm(total=len(train_loader), desc=f"Epoch {epoch} for Seed {seed}", position=1)
+        for batchs in train_loader:
             for batch in batchs:
                 batch = to_device(batch, device)
 
