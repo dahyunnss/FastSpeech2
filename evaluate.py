@@ -15,12 +15,24 @@ from dataset import Dataset
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-def evaluate(model, step, configs, logger=None, vocoder=None):
+def evaluate(model, step, configs, val_file, logger=None, vocoder=None):
     preprocess_config, model_config, train_config = configs
 
-    # Get dataset
+    # # Get dataset
+    # dataset = Dataset(
+    #     "val.txt", preprocess_config, train_config, sort=False, drop_last=False
+    # )
+    # batch_size = train_config["optimizer"]["batch_size"]
+    # loader = DataLoader(
+    #     dataset,
+    #     batch_size=batch_size,
+    #     shuffle=False,
+    #     collate_fn=dataset.collate_fn,
+    # )
+    
+    # Get dataset for the specific seed
     dataset = Dataset(
-        "val.txt", preprocess_config, train_config, sort=False, drop_last=False
+        val_file, preprocess_config, train_config, sort=False, drop_last=False
     )
     batch_size = train_config["optimizer"]["batch_size"]
     loader = DataLoader(
@@ -116,5 +128,10 @@ if __name__ == "__main__":
     # Get model
     model = get_model(args, configs, device, train=False).to(device)
 
-    message = evaluate(model, args.restore_step, configs)
-    print(message)
+
+    for seed in range(10):
+        val_file = f'preprocessed_data/LJSpeech_paper/seed_all/val_seed_{seed}.txt'
+        print(f"Evaluating on {val_file} ...")
+        message = evaluate(model, args.restore_step, configs, val_file)
+        print(message)
+        
