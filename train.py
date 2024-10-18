@@ -9,6 +9,7 @@ from tqdm import tqdm
 import json
 import random
 import numpy as np
+import time
 
 from utils.model import get_model, get_vocoder, get_param_num
 from utils.tools import to_device, log, synth_one_sample
@@ -29,16 +30,16 @@ def set_random_seed(seed):
     torch.backends.cudnn.benchmark = False
     
 
-def main(args, configs, seed, seed_data_dict):
+def main(args, configs, seed):
     print(f"Prepare training for Seed {seed} ...")
 
     preprocess_config, model_config, train_config = configs
 
     # Get dataset
-    seed_data = seed_data_dict[f'seed_{seed}']
-    train_data_file = seed_data['Train_Set']
-    val_data_file = seed_data['Validation_Set']
-
+    data_dir = '/userHome/userhome2/dahyun/FastSpeech2_SingleTTS/preprocessed_data/LJSpeech_paper/seed_all'
+    train_data_file = os.path.join(data_dir, f'train_seed_{seed}.txt')
+    val_data_file = os.path.join(data_dir, f'val_seed_{seed}.txt')
+ 
     # Train and Validation Datasets
     train_dataset = Dataset(train_data_file, preprocess_config, train_config, sort=True, drop_last=True)
     val_dataset = Dataset(val_data_file, preprocess_config, train_config, sort=False, drop_last=False)
@@ -89,10 +90,13 @@ def main(args, configs, seed, seed_data_dict):
     grad_clip_thresh = train_config["optimizer"]["grad_clip_thresh"]
     total_step = train_config["step"]["total_step"]
     log_step = train_config["step"]["log_step"]
-    save_step = train_config["step"]["save_step"]
-    synth_step = train_config["step"]["synth_step"]
-    val_step = train_config["step"]["val_step"]
+    # save_step = train_config["step"]["save_step"]
+    # synth_step = train_config["step"]["synth_step"]
+    # val_step = train_config["step"]["val_step"]
 
+    # Config에서 성능 확인할 스텝 목록 가져오기
+    specific_steps = train_config["step"]["specific_steps"]
+    
     outer_bar = tqdm(total=total_step, desc=f"Training for Seed {seed}", position=0)
     outer_bar.n = args.restore_step
     outer_bar.update()
@@ -135,7 +139,16 @@ def main(args, configs, seed, seed_data_dict):
 
                     log(train_logger, step, losses=losses)
 
-                if step % synth_step == 0:
+                # 특정 스텝에서만 성능 확인 및 모델 저장
+                if step in specific_steps:
+                    model.eval()
+                    val_file = os.path.join(data_dir, f'val_seed_{seed}.txt')
+                    message = evaluate(model, step, configs, val_file, val_logger, vocoder)
+                    with open(os.path.join(val_log_path, "log.txt"), "a") as f:
+                        f.write(message + "\n")
+                    outer_bar.write(message)
+                        
+               
                     fig, wav_reconstruction, wav_prediction, tag = synth_one_sample(
                         batch,
                         output,
@@ -148,9 +161,7 @@ def main(args, configs, seed, seed_data_dict):
                         fig=fig,
                         tag="Training/step_{}_{}".format(step, tag),
                     )
-                    sampling_rate = preprocess_config["preprocessing"]["audio"][
-                        "sampling_rate"
-                    ]
+                    sampling_rate = preprocess_config["preprocessing"]["audio"]["sampling_rate"]
                     log(
                         train_logger,
                         audio=wav_reconstruction,
@@ -164,16 +175,8 @@ def main(args, configs, seed, seed_data_dict):
                         tag="Training/step_{}_{}_synthesized".format(step, tag),
                     )
 
-                if step % val_step == 0:
-                    model.eval()
-                    message = evaluate(model, step, configs, val_logger, vocoder)
-                    with open(os.path.join(val_log_path, "log.txt"), "a") as f:
-                        f.write(message + "\n")
-                    outer_bar.write(message)
 
-                    model.train()
-
-                if step % save_step == 0:
+                
                     torch.save(
                         {
                             "model": model.module.state_dict(),
@@ -181,12 +184,14 @@ def main(args, configs, seed, seed_data_dict):
                         },
                         os.path.join(
                             train_config["path"]["ckpt_path"],
-                            "{}.pth.tar".format(step),
+                            f"seed_{seed}_{step}.pth.tar",
                         ),
                     )
+                    
+                    model.train()
 
                 if step == total_step:
-                    quit()
+                    return
                 step += 1
                 outer_bar.update(1)
 
@@ -219,5 +224,28 @@ if __name__ == "__main__":
     model_config = yaml.load(open(args.model_config, "r"), Loader=yaml.FullLoader)
     train_config = yaml.load(open(args.train_config, "r"), Loader=yaml.FullLoader)
     configs = (preprocess_config, model_config, train_config)
+            
+    for seed in range(0,10):
+        set_random_seed(seed)    
+        
+        start_time = time.time()
+        log_file_path = os.path.join(train_config["path"]["log_path"], f"train_seed_{seed}", "train_log.txt")
+        
+        main(args, configs, seed)
+        end_time = time.time()
+        
+        # 학습에 걸린 시간 계산
+        elapsed_time = end_time - start_time
+        
+        # 시간을 시간, 분, 초로 변환
+        hours, remainder = divmod(elapsed_time, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        elapsed_time_message = f"Seed {seed} Training Time: {int(hours)}h {int(minutes)}m {int(seconds)}s\n"
 
-    main(args, configs)
+        
+        # 학습 시간이 로그 파일에 기록되도록 설정
+        with open(log_file_path, "a") as log_file:
+            log_file.write(elapsed_time_message)
+        
+        print(elapsed_time_message)
+        
