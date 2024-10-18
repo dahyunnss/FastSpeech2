@@ -35,28 +35,31 @@ class Dataset(Dataset):
         speaker_id = self.speaker_map[speaker]
         raw_text = self.raw_text[idx]
         phone = np.array(text_to_sequence(self.text[idx], self.cleaners))
+        
+        chapter = basename.split("-")[0]
+        
         mel_path = os.path.join(
             self.preprocessed_path,
             "mel",
-            "{}-mel-{}.npy".format(speaker, basename),
+            "{}-mel-{}.npy".format(chapter, basename),
         )
         mel = np.load(mel_path)
         pitch_path = os.path.join(
             self.preprocessed_path,
             "pitch",
-            "{}-pitch-{}.npy".format(speaker, basename),
+            "{}-pitch-{}.npy".format(chapter, basename),
         )
         pitch = np.load(pitch_path)
         energy_path = os.path.join(
             self.preprocessed_path,
             "energy",
-            "{}-energy-{}.npy".format(speaker, basename),
+            "{}-energy-{}.npy".format(chapter, basename),
         )
         energy = np.load(energy_path)
         duration_path = os.path.join(
             self.preprocessed_path,
             "duration",
-            "{}-duration-{}.npy".format(speaker, basename),
+            "{}-duration-{}.npy".format(chapter, basename),
         )
         duration = np.load(duration_path)
 
@@ -73,21 +76,19 @@ class Dataset(Dataset):
 
         return sample
 
-    def process_meta(self, filename):
-        with open(
-            os.path.join(self.preprocessed_path, filename), "r", encoding="utf-8"
-        ) as f:
-            name = []
-            speaker = []
-            text = []
-            raw_text = []
+    def process_meta(self, filename):            
+        name = []
+        speaker = []
+        text = []
+        raw_text = []
+        with open(filename, "r", encoding="utf-8") as f:
             for line in f.readlines():
-                n, s, t, r = line.strip("\n").split("|")
+                n, s, t, r = line.strip().split("|")
                 name.append(n)
                 speaker.append(s)
                 text.append(t)
                 raw_text.append(r)
-            return name, speaker, text, raw_text
+        return name, speaker, text, raw_text
 
     def reprocess(self, data, idxs):
         ids = [data[idx]["id"] for idx in idxs]
@@ -153,6 +154,7 @@ class TextDataset(Dataset):
         self.basename, self.speaker, self.text, self.raw_text = self.process_meta(
             filepath
         )
+        
         with open(
             os.path.join(
                 preprocess_config["path"]["preprocessed_path"], "speakers.json"
@@ -206,50 +208,51 @@ if __name__ == "__main__":
     from utils.utils import to_device
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    preprocess_config = yaml.load(
-        open("./config/LJSpeech/preprocess.yaml", "r"), Loader=yaml.FullLoader
-    )
-    train_config = yaml.load(
-        open("./config/LJSpeech/train.yaml", "r"), Loader=yaml.FullLoader
-    )
+    preprocess_config = yaml.load(open("./config/LJSpeech_paper/preprocess.yaml", "r"), Loader=yaml.FullLoader)
+    train_config = yaml.load(open("./config/LJSpeech_paper/train.yaml", "r"), Loader=yaml.FullLoader)
 
-    train_dataset = Dataset(
-        "train.txt", preprocess_config, train_config, sort=True, drop_last=True
-    )
-    val_dataset = Dataset(
-        "val.txt", preprocess_config, train_config, sort=False, drop_last=False
-    )
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=train_config["optimizer"]["batch_size"] * 4,
-        shuffle=True,
-        collate_fn=train_dataset.collate_fn,
-    )
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=train_config["optimizer"]["batch_size"],
-        shuffle=False,
-        collate_fn=val_dataset.collate_fn,
-    )
+    num_experiments = 10
+    
+    for seed in range(num_experiments):
+        print("Running experiment for seed {seed}...")
 
-    n_batch = 0
-    for batchs in train_loader:
-        for batch in batchs:
-            to_device(batch, device)
-            n_batch += 1
-    print(
-        "Training set  with size {} is composed of {} batches.".format(
-            len(train_dataset), n_batch
+        # 시드별 파일 경로
+        train_file = f'preprocessed_data/LJSpeech_paper/seed_all/train_seed_{seed}.txt'
+        val_file = f'preprocessed_data/LJSpeech_paper/seed_all/val_seed_{seed}.txt'
+
+        train_dataset = Dataset(train_file, preprocess_config, train_config, sort=True, drop_last=True)
+        val_dataset = Dataset(val_file, preprocess_config, train_config, sort=False, drop_last=False)
+        
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=train_config["optimizer"]["batch_size"] * 4,
+            shuffle=True,
+            collate_fn=train_dataset.collate_fn,
         )
-    )
-
-    n_batch = 0
-    for batchs in val_loader:
-        for batch in batchs:
-            to_device(batch, device)
-            n_batch += 1
-    print(
-        "Validation set  with size {} is composed of {} batches.".format(
-            len(val_dataset), n_batch
+        val_loader = DataLoader(
+            val_dataset,
+            batch_size=train_config["optimizer"]["batch_size"],
+            shuffle=False,
+            collate_fn=val_dataset.collate_fn,
         )
-    )
+
+        n_batch = 0
+        for batchs in train_loader:
+            for batch in batchs:
+                to_device(batch, device)
+                n_batch += 1
+        print(
+            f"Training set for seed {seed} with size {len(train_dataset)} is composed of {n_batch} batches."
+        )
+
+        n_batch = 0
+        for batchs in val_loader:
+            for batch in batchs:
+                to_device(batch, device)
+                n_batch += 1
+        print(
+            f"Validation set for seed {seed} with size {len(val_dataset)} is composed of {n_batch} batches."
+        )
+        
+        # Optionally, add a break here if you only want to test one seed
+        # break
