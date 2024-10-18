@@ -64,30 +64,36 @@ class Preprocessor:
 
         # Compute pitch, energy, duration, and mel-spectrogram
         speakers = {}
-        for i, speaker in enumerate(tqdm(os.listdir(self.in_dir))):
-            speakers[speaker] = i
-            for wav_name in os.listdir(os.path.join(self.in_dir, speaker)):
-                if ".wav" not in wav_name:
+        speaker = "LJSpeech"  # 스피커 이름 설정
+        speakers[speaker] = 0
+       
+        for wav_name in tqdm(os.listdir(self.in_dir)):
+            if ".wav" not in wav_name:
+                continue
+
+            basename = wav_name.split(".")[0]
+            chapter = basename.split("-")[0]
+            speaker = "LJSpeech"
+      
+            tg_path = os.path.join(
+                self.out_dir, "TextGrid", "LJSpeech","{}.TextGrid".format(basename)
+            )
+            
+            if os.path.exists(tg_path):
+                ret = self.process_utterance(speaker, chapter, basename)
+                if ret is None:
                     continue
+                else:
+                    info, pitch, energy, n = ret
+                out.append(info)   
 
-                basename = wav_name.split(".")[0]
-                tg_path = os.path.join(
-                    self.out_dir, "TextGrid", speaker, "{}.TextGrid".format(basename)
-                )
-                if os.path.exists(tg_path):
-                    ret = self.process_utterance(speaker, basename)
-                    if ret is None:
-                        continue
-                    else:
-                        info, pitch, energy, n = ret
-                    out.append(info)
+            if len(pitch) > 0:
+                pitch_scaler.partial_fit(pitch.reshape((-1, 1)))
+            if len(energy) > 0:
+                energy_scaler.partial_fit(energy.reshape((-1, 1)))
 
-                if len(pitch) > 0:
-                    pitch_scaler.partial_fit(pitch.reshape((-1, 1)))
-                if len(energy) > 0:
-                    energy_scaler.partial_fit(energy.reshape((-1, 1)))
+            n_frames += n
 
-                n_frames += n
 
         print("Computing statistic quantities ...")
         # Perform normalization if necessary
@@ -141,22 +147,39 @@ class Preprocessor:
 
         random.shuffle(out)
         out = [r for r in out if r is not None]
+        
+        total_len = len(out)
+        test_size = int(total_len * 0.2)
+        test_data = out[:test_size]
+        train_val_data = out[test_size:]
+        
+        train_size = int(len(train_val_data) * 0.75)
+        #print("==========train_size=========",train_size)
+        train_data = train_val_data[:train_size]
+        #print("==========train_data=========",train_data)
+        val_data = train_val_data[train_size:]
+        #print("==========valid_data=========",val_data)
+        
 
         # Write metadata
         with open(os.path.join(self.out_dir, "train.txt"), "w", encoding="utf-8") as f:
-            for m in out[self.val_size :]:
+            for m in train_data:
                 f.write(m + "\n")
         with open(os.path.join(self.out_dir, "val.txt"), "w", encoding="utf-8") as f:
-            for m in out[: self.val_size]:
+            for m in val_data:
                 f.write(m + "\n")
+        with open(os.path.join(self.out_dir, "test.txt"), "w", encoding="utf-8") as f:
+            for m in test_data:
+                f.write(m + "\n")
+
 
         return out
 
-    def process_utterance(self, speaker, basename):
-        wav_path = os.path.join(self.in_dir, speaker, "{}.wav".format(basename))
-        text_path = os.path.join(self.in_dir, speaker, "{}.lab".format(basename))
+    def process_utterance(self, speaker, chapter, basename):
+        wav_path = os.path.join(self.in_dir, "{}.wav".format(basename))
+        text_path = os.path.join(self.in_dir, "{}.lab".format(basename))
         tg_path = os.path.join(
-            self.out_dir, "TextGrid", speaker, "{}.TextGrid".format(basename)
+            self.out_dir, "TextGrid", "LJSpeech","{}.TextGrid".format(basename)
         )
 
         # Get alignments
@@ -228,20 +251,17 @@ class Preprocessor:
             energy = energy[: len(duration)]
 
         # Save files
-        dur_filename = "{}-duration-{}.npy".format(speaker, basename)
+        dur_filename = "{}-duration-{}.npy".format(chapter, basename)
         np.save(os.path.join(self.out_dir, "duration", dur_filename), duration)
 
-        pitch_filename = "{}-pitch-{}.npy".format(speaker, basename)
+        pitch_filename = "{}-pitch-{}.npy".format(chapter, basename)
         np.save(os.path.join(self.out_dir, "pitch", pitch_filename), pitch)
 
-        energy_filename = "{}-energy-{}.npy".format(speaker, basename)
+        energy_filename = "{}-energy-{}.npy".format(chapter, basename)
         np.save(os.path.join(self.out_dir, "energy", energy_filename), energy)
 
-        mel_filename = "{}-mel-{}.npy".format(speaker, basename)
-        np.save(
-            os.path.join(self.out_dir, "mel", mel_filename),
-            mel_spectrogram.T,
-        )
+        mel_filename = "{}-mel-{}.npy".format(chapter, basename)
+        np.save(os.path.join(self.out_dir, "mel", mel_filename),mel_spectrogram.T,)
 
         return (
             "|".join([basename, speaker, text, raw_text]),
